@@ -8,6 +8,7 @@ rules:
       - namespaces
       - pods
       - serviceaccounts
+      - services
     verbs: ["get", "list", "watch"]
 
   - apiGroups: ["apps"]
@@ -34,6 +35,13 @@ rules:
     resources:
       - ciliumnetworkpolicies
       - ciliumclusterwidenetworkpolicies
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["traefik.io"]
+    resources:
+      - ingressroutes
+      - middlewares
+      - tlsoptions
     verbs: ["get", "list", "watch"]
 
   - apiGroups: ["security.meslami.io"]

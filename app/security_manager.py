@@ -6,6 +6,7 @@ from kubernetes import client
 from app.models import SecurityFindingModel
 from app.scoring import calculate_namespace_score, classify_posture, count_by_severity
 from app.scanners.deployment_scanner import DeploymentScanner
+from app.scanners.exposure_scanner import ExposureScanner
 from app.scanners.namespace_scanner import NamespaceScanner
 from app.scanners.network_scanner import NetworkScanner
 from app.scanners.pod_scanner import PodScanner
@@ -25,8 +26,8 @@ class SecurityManager:
       - Deployment event -> scan only Deployment.spec.template
 
     Consistency path:
-      - Namespace, RBAC, NetworkPolicy and periodic events reconcile the
-        namespace using paginated scans.
+      - Namespace, RBAC, NetworkPolicy, Service and periodic events reconcile
+        the namespace using paginated scans.
     """
 
     GROUP = "security.meslami.io"
@@ -58,7 +59,6 @@ class SecurityManager:
             raise
 
     def handle_pod_event(self, pod_body: dict, namespace: str):
-        """Scan only the changed Pod."""
         profile = self.load_profile(namespace)
 
         pod = self.core_api.api_client._ApiClient__deserialize_model(
@@ -73,17 +73,9 @@ class SecurityManager:
         self.update_namespace_report_from_findings(namespace, findings, event_mode=True)
 
     def handle_pod_delete(self, namespace: str):
-        """
-        Simple MVP delete handling.
-
-        If a Pod is deleted, related findings may no longer be valid.
-        Instead of trying to surgically update individual findings, we reconcile
-        the namespace to refresh the report.
-        """
         self.reconcile_namespace(namespace)
 
     def handle_deployment_event(self, deployment_body: dict, namespace: str):
-        """Scan only the changed Deployment Pod template."""
         profile = self.load_profile(namespace)
 
         deployment = self.core_api.api_client._ApiClient__deserialize_model(
@@ -98,40 +90,25 @@ class SecurityManager:
         self.update_namespace_report_from_findings(namespace, findings, event_mode=True)
 
     def reconcile_namespace(self, namespace: str, profile_name: str = "default-profile"):
-        """
-        Full namespace reconciliation.
-
-        This runs all namespace-relevant scanners and is used for:
-          - Namespace changes
-          - NetworkPolicy changes
-          - RBAC changes
-          - ServiceAccount changes
-          - Pod deletes
-          - Periodic consistency checks
-        """
         profile = self.load_profile(namespace, profile_name)
 
         namespace_scanner = NamespaceScanner(self.core_api, profile, self.logger)
         pod_scanner = PodScanner(self.core_api, profile, self.logger)
         network_scanner = NetworkScanner(self.networking_api, self.custom_api, profile, self.logger)
+        exposure_scanner = ExposureScanner(self.core_api, self.networking_api, self.custom_api, profile, self.logger)
         rbac_scanner = RBACScanner(self.rbac_api, profile, self.logger)
 
         findings: List[SecurityFindingModel] = []
         findings.extend(namespace_scanner.scan_namespace(namespace))
         findings.extend(pod_scanner.scan_namespace(namespace))
         findings.extend(network_scanner.scan_namespace(namespace))
+        findings.extend(exposure_scanner.scan_namespace(namespace))
         findings.extend(rbac_scanner.scan_namespace(namespace))
 
         self.persist_findings_and_remediations(namespace, findings)
         self.update_namespace_report_from_findings(namespace, findings, event_mode=False)
 
     def persist_findings_and_remediations(self, namespace: str, findings: List[SecurityFindingModel]):
-        """
-        Persist only medium/high/critical findings.
-
-        Low-risk findings are counted in the NamespaceSecurityReport but not
-        stored individually as CRDs to avoid excessive object creation at scale.
-        """
         for finding in findings:
             if finding.severity not in ["critical", "high", "medium"]:
                 continue
@@ -183,7 +160,8 @@ class SecurityManager:
                 "monitoringModel": (
                     "Namespace posture is monitored by watching security-relevant "
                     "resources: Namespace, Pods, Deployments, ServiceAccounts, "
-                    "RoleBindings, NetworkPolicies, and CiliumNetworkPolicies."
+                    "RoleBindings, Services, Ingresses, NetworkPolicies, "
+                    "CiliumNetworkPolicies, and Traefik IngressRoutes."
                 ),
                 "scalabilityNote": (
                     "Pod events scan only the changed Pod. Deployment events scan only "

@@ -92,3 +92,18 @@ spec:
                     flagDefaultServiceAccountRBAC:
                       type: boolean
                       default: true
+                    flagLoadBalancerServices:
+                      type: boolean
+                      default: true
+                    flagNodePortServices:
+                      type: boolean
+                      default: true
+                    flagSensitiveExposedPorts:
+                      type: boolean
+                      default: true
+                    requireIngressTLS:
+                      type: boolean
+                      default: true
+                    requireTraefikIngressRouteTLS:
+                      type: boolean
+                      default: true

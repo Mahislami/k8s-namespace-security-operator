@@ -1,14 +1,12 @@
 apiVersion: security.meslami.io/v1alpha1
 kind: SecurityPolicyProfile
 metadata:
-  name: {{ .Values.securityProfile.name }}
-  namespace: {{ .Values.operator.namespace }}
+  name: default-profile
+  namespace: security-operator-demo
 spec:
-  severityThreshold: {{ .Values.securityProfile.severityThreshold }}
-
+  severityThreshold: medium
   rules:
     requirePodSecurityRestricted: true
-
     forbidPrivilegedContainers: true
     forbidHostNetwork: true
     forbidHostPID: true
@@ -16,25 +14,11 @@ spec:
     requireRunAsNonRoot: true
     forbidLatestImageTag: true
     flagDefaultServiceAccount: true
-
     requireReadinessProbe: true
-    requireLivenessProbe: false
     requireResourceRequests: true
     requireResourceLimits: true
-
-    requireDeploymentReplicas: true
-    minimumDeploymentReplicas: 2
-    requireRollingUpdateStrategy: true
-
     requireNetworkPolicy: true
-    requireCiliumNetworkPolicy: false
-
-    forbidClusterAdminRoleBinding: true
-    forbidWildcardRBAC: true
-    flagDefaultServiceAccountRBAC: true
-
     flagLoadBalancerServices: true
     flagNodePortServices: true
     flagSensitiveExposedPorts: true
     requireIngressTLS: true
-    requireTraefikIngressRouteTLS: true
