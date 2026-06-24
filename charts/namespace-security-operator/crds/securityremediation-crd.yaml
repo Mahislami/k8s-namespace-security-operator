@@ -1,0 +1,60 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: securityremediations.security.meslami.io
+spec:
+  group: security.meslami.io
+  scope: Namespaced
+  names:
+    plural: securityremediations
+    singular: securityremediation
+    kind: SecurityRemediation
+    shortNames:
+      - secrem
+      - sr
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - findingRef
+                - mode
+                - actionType
+                - description
+              properties:
+                findingRef:
+                  type: string
+                mode:
+                  type: string
+                  enum:
+                    - suggest
+                    - manual
+                actionType:
+                  type: string
+                  enum:
+                    - manifest-patch
+                    - command
+                    - documentation
+                    - network-policy
+                    - service-account-change
+                description:
+                  type: string
+                command:
+                  type: string
+                patch:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                risk:
+                  type: string
+                  enum:
+                    - low
+                    - medium
+                    - high

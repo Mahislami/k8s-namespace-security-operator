@@ -1,0 +1,99 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: securityfindings.security.meslami.io
+spec:
+  group: security.meslami.io
+  scope: Namespaced
+  names:
+    plural: securityfindings
+    singular: securityfinding
+    kind: SecurityFinding
+    shortNames:
+      - secfinding
+      - sf
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Severity
+          type: string
+          jsonPath: .spec.severity
+        - name: Category
+          type: string
+          jsonPath: .spec.category
+        - name: Resource
+          type: string
+          jsonPath: .spec.resourceName
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - severity
+                - category
+                - resourceKind
+                - resourceName
+                - issue
+                - recommendation
+              properties:
+                severity:
+                  type: string
+                  enum:
+                    - critical
+                    - high
+                    - medium
+                    - low
+                    - info
+                category:
+                  type: string
+                  enum:
+                    - pod-security
+                    - deployment-security
+                    - namespace-security
+                    - network-security
+                    - service-account
+                    - image-security
+                    - attack-path
+                resourceKind:
+                  type: string
+                resourceName:
+                  type: string
+                issue:
+                  type: string
+                reason:
+                  type: array
+                  items:
+                    type: string
+                recommendation:
+                  type: string
+                remediationRef:
+                  type: string
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum:
+                    - Active
+                    - Resolved
+                    - Suppressed
+                firstSeen:
+                  type: string
+                  format: date-time
+                lastSeen:
+                  type: string
+                  format: date-time
+      subresources:
+        status: {}

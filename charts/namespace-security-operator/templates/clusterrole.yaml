@@ -1,0 +1,51 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - daemonsets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - networkpolicies
+      - ingresses
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["cilium.io"]
+    resources:
+      - ciliumnetworkpolicies
+      - ciliumclusterwidenetworkpolicies
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["security.meslami.io"]
+    resources:
+      - securitypolicyprofiles
+      - namespacesecurityreports
+      - securityfindings
+      - securityremediations
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["security.meslami.io"]
+    resources:
+      - namespacesecurityreports/status
+      - securityfindings/status
+    verbs: ["get", "update", "patch"]

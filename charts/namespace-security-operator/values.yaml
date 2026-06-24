@@ -1,0 +1,11 @@
+image:
+  repository: namespace-security-operator
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+operator:
+  namespace: security-system
+
+securityProfile:
+  name: default-profile
+  severityThreshold: medium
