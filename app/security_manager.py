@@ -61,9 +61,14 @@ class SecurityManager:
     def handle_pod_event(self, pod_body: dict, namespace: str):
         profile = self.load_profile(namespace)
 
-        pod = self.core_api.api_client._ApiClient__deserialize_model(
-            pod_body,
-            client.V1Pod,
+        pod_name = pod_body.get("metadata", {}).get("name")
+        if not pod_name:
+            self.logger.warning("Pod event body has no metadata.name; skipping.")
+            return
+
+        pod = self.core_api.read_namespaced_pod(
+            name=pod_name,
+            namespace=namespace,
         )
 
         scanner = PodScanner(self.core_api, profile, self.logger)
@@ -78,9 +83,15 @@ class SecurityManager:
     def handle_deployment_event(self, deployment_body: dict, namespace: str):
         profile = self.load_profile(namespace)
 
-        deployment = self.core_api.api_client._ApiClient__deserialize_model(
-            deployment_body,
-            client.V1Deployment,
+        deployment_name = deployment_body.get("metadata", {}).get("name")
+        if not deployment_name:
+            self.logger.warning("Deployment event body has no metadata.name; skipping.")
+            return
+
+        apps_api = client.AppsV1Api()
+        deployment = apps_api.read_namespaced_deployment(
+            name=deployment_name,
+            namespace=namespace,
         )
 
         scanner = DeploymentScanner(self.core_api, profile, self.logger)
@@ -147,6 +158,9 @@ class SecurityManager:
             "spec": {
                 "namespace": namespace,
             },
+        }
+
+        status_body = {
             "status": {
                 "namespace": namespace,
                 "profileUsed": "default-profile",
@@ -168,7 +182,7 @@ class SecurityManager:
                     "spec.template. Full namespace reconciliation is paginated and used "
                     "for consistency."
                 ),
-            },
+            }
         }
 
         try:
@@ -182,7 +196,7 @@ class SecurityManager:
             self.logger.info(f"Created NamespaceSecurityReport for {namespace}")
         except client.exceptions.ApiException as exc:
             if exc.status == 409:
-                self.custom_api.replace_namespaced_custom_object(
+                self.custom_api.patch_namespaced_custom_object(
                     group=self.GROUP,
                     version=self.VERSION,
                     namespace=namespace,
@@ -190,9 +204,19 @@ class SecurityManager:
                     name=report_name,
                     body=body,
                 )
-                self.logger.info(f"Updated NamespaceSecurityReport for {namespace}")
+                self.logger.info(f"Patched NamespaceSecurityReport spec for {namespace}")
             else:
                 raise
+
+        self.custom_api.patch_namespaced_custom_object_status(
+            group=self.GROUP,
+            version=self.VERSION,
+            namespace=namespace,
+            plural="namespacesecurityreports",
+            name=report_name,
+            body=status_body,
+        )
+        self.logger.info(f"Updated NamespaceSecurityReport status for {namespace}")
 
     def upsert_security_finding(
         self,
@@ -291,13 +315,15 @@ class SecurityManager:
             )
         except client.exceptions.ApiException as exc:
             if exc.status == 409:
-                self.custom_api.replace_namespaced_custom_object(
+                self.custom_api.patch_namespaced_custom_object(
                     group=self.GROUP,
                     version=self.VERSION,
                     namespace=namespace,
                     plural="securityremediations",
                     name=remediation_name,
-                    body=body,
+                    body={
+                        "spec": body["spec"]
+                    },
                 )
             else:
                 raise

@@ -16,6 +16,22 @@ spec:
     - name: v1alpha1
       served: true
       storage: true
+      additionalPrinterColumns:
+        - name: Score
+          type: integer
+          jsonPath: .status.score
+        - name: Posture
+          type: string
+          jsonPath: .status.posture
+        - name: Findings
+          type: integer
+          jsonPath: .status.totalFindingsEvaluated
+        - name: Updated
+          type: string
+          jsonPath: .status.lastUpdated
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
       schema:
         openAPIV3Schema:
           type: object
@@ -29,12 +45,12 @@ spec:
               properties:
                 namespace:
                   type: string
-                profile:
-                  type: string
             status:
               type: object
               properties:
                 namespace:
+                  type: string
+                profileUsed:
                   type: string
                 score:
                   type: integer
@@ -76,6 +92,7 @@ spec:
                     type: string
                 lastUpdated:
                   type: string
+                  format: date-time
                 monitoringModel:
                   type: string
                 scalabilityNote:
