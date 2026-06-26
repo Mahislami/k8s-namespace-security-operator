@@ -1,10 +1,19 @@
-image:
-  repository: namespace-security-operator
-  tag: "0.1.0"
-  pullPolicy: IfNotPresent
-
 operator:
   namespace: security-system
+
+  image: namespace-security-operator:latest
+  imagePullPolicy: IfNotPresent
+
+  # Empty means cluster-wide except excluded namespaces.
+  # Example: "security-operator-demo,default"
+  watchNamespaces: ""
+
+  excludeNamespaces: "kube-system,kube-public,kube-node-lease"
+
+  dirtyEventThreshold: "10"
+  dirtyFlushSeconds: "10"
+  dirtyWorkerIntervalSeconds: "2"
+  fullResyncSeconds: "1800"
 
 securityProfile:
   name: default-profile

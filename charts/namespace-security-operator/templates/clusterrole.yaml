@@ -19,6 +19,12 @@ rules:
       - statefulsets
     verbs: ["get", "list", "watch"]
 
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - roles

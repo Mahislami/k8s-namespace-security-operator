@@ -9,8 +9,11 @@ class DeploymentScanner:
     Scans Deployment security without listing Pods.
 
     It checks:
-    - Deployment-level resilience/security settings
-    - Deployment.spec.template security by reusing PodScanner
+    - Deployment-level settings
+    - Deployment.spec.template using PodScanner logic
+
+    Template findings are reclassified as deployment-security findings so they
+    are not confused with findings from live Pods.
     """
 
     def __init__(self, core_api, profile: dict, logger):
@@ -27,7 +30,6 @@ class DeploymentScanner:
 
         findings.extend(self.scan_deployment_level_rules(deployment))
 
-        # Build a lightweight Pod-like object from Deployment.spec.template.
         pod_like = type("PodLike", (), {})()
         pod_like.metadata = type("Metadata", (), {})()
         pod_like.metadata.namespace = namespace
@@ -39,10 +41,15 @@ class DeploymentScanner:
         for finding in template_findings:
             finding.resource_kind = "Deployment"
             finding.resource_name = deployment_name
+            finding.category = "deployment-security"
+
             finding.name = finding.name.replace(
                 f"deployment-{deployment_name}-template",
                 deployment_name,
             )
+
+            finding.issue = f"Deployment template: {finding.issue}"
+            finding.reason = [f"spec.template: {reason}" for reason in finding.reason]
 
         findings.extend(template_findings)
         return findings

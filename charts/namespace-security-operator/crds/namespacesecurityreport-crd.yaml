@@ -26,6 +26,9 @@ spec:
         - name: Findings
           type: integer
           jsonPath: .status.totalFindingsEvaluated
+        - name: Unique
+          type: integer
+          jsonPath: .status.uniqueFindingsForScore
         - name: Updated
           type: string
           jsonPath: .status.lastUpdated
@@ -68,6 +71,9 @@ spec:
                 totalFindingsEvaluated:
                   type: integer
                   minimum: 0
+                uniqueFindingsForScore:
+                  type: integer
+                  minimum: 0
                 findingsBySeverity:
                   type: object
                   properties:
@@ -86,6 +92,24 @@ spec:
                     info:
                       type: integer
                       minimum: 0
+                groupedFindings:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      severity:
+                        type: string
+                      category:
+                        type: string
+                      issue:
+                        type: string
+                      count:
+                        type: integer
+                        minimum: 0
+                      affectedResources:
+                        type: array
+                        items:
+                          type: string
                 topRecommendations:
                   type: array
                   items:

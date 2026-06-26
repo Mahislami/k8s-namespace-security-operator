@@ -61,8 +61,14 @@ spec:
                   enum:
                     - pod-security
                     - deployment-security
+                    - daemonset-security
+                    - statefulset-security
+                    - replicaset-security
+                    - job-security
+                    - cronjob-security
                     - namespace-security
                     - network-security
+                    - rbac
                     - service-account
                     - image-security
                     - attack-path

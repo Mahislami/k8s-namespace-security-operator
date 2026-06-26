@@ -1,4 +1,5 @@
 from typing import List
+import re
 
 from kubernetes import client
 
@@ -10,13 +11,21 @@ class PodScanner:
     """
     Scans Pods for Kubernetes security risks.
 
-    Normal path:
-      - scan_pod() scans one changed Pod.
-
-    Consistency path:
-      - scan_namespace() performs paginated namespace scanning.
-      - This is only for startup/manual/periodic reconciliation.
+    Important design:
+    - Controlled Pods are skipped in namespace scans because their security
+      belongs to the owning workload template.
+    - Short-lived generated Pods are NOT skipped.
+    - Timestamped generated Pod names are normalized so repeated CronJob/Job
+      executions do not create endless unique findings.
     """
+
+    CONTROLLED_OWNER_KINDS = {
+        "ReplicaSet",
+        "DaemonSet",
+        "StatefulSet",
+        "Job",
+        "CronJob",
+    }
 
     def __init__(self, core_api: client.CoreV1Api, profile: dict, logger):
         self.core_api = core_api
@@ -36,6 +45,9 @@ class PodScanner:
             )
 
             for pod in response.items:
+                if self.is_controlled_pod(pod):
+                    continue
+
                 findings.extend(self.scan_pod(pod))
 
             continue_token = response.metadata._continue
@@ -44,22 +56,45 @@ class PodScanner:
 
         return findings
 
+    def is_controlled_pod(self, pod) -> bool:
+        owners = pod.metadata.owner_references or []
+        return any(owner.kind in self.CONTROLLED_OWNER_KINDS for owner in owners)
+
+    def normalize_generated_name(self, name: str) -> str:
+        """
+        Examples:
+        external-dns-google-1782423349 -> external-dns-google
+        network-prober-nur-1782423109 -> network-prober-nur
+        dns-hecant-golang-1782423110 -> dns-hecant-golang
+        """
+        if not name:
+            return ""
+
+        return re.sub(r"-\d{8,}$", "", name)
+
+    def observed_reason(self, original_name: str, normalized_name: str) -> List[str]:
+        if original_name != normalized_name:
+            return [f"observedPod={original_name}"]
+        return []
+
     def scan_pod(self, pod) -> List[SecurityFindingModel]:
         findings = []
 
         namespace = pod.metadata.namespace
         pod_name = pod.metadata.name
+        resource_name = self.normalize_generated_name(pod_name)
+        base_reason = self.observed_reason(pod_name, resource_name)
 
         if self.rules.get("forbidHostNetwork", True) and pod.spec.host_network:
             findings.append(SecurityFindingModel(
-                name=f"{namespace}-{pod_name}-host-network",
+                name=f"{namespace}-{resource_name}-host-network",
                 severity="high",
                 category="pod-security",
                 namespace=namespace,
                 resource_kind="Pod",
-                resource_name=pod_name,
+                resource_name=resource_name,
                 issue="Pod is using hostNetwork",
-                reason=["spec.hostNetwork=true"],
+                reason=base_reason + ["spec.hostNetwork=true"],
                 recommendation="Set spec.hostNetwork=false unless explicitly required.",
                 remediation_type="manifest-patch",
                 remediation_patch={"spec": {"hostNetwork": False}},
@@ -67,14 +102,14 @@ class PodScanner:
 
         if self.rules.get("forbidHostPID", True) and pod.spec.host_pid:
             findings.append(SecurityFindingModel(
-                name=f"{namespace}-{pod_name}-host-pid",
+                name=f"{namespace}-{resource_name}-host-pid",
                 severity="high",
                 category="pod-security",
                 namespace=namespace,
                 resource_kind="Pod",
-                resource_name=pod_name,
+                resource_name=resource_name,
                 issue="Pod is using hostPID",
-                reason=["spec.hostPID=true"],
+                reason=base_reason + ["spec.hostPID=true"],
                 recommendation="Set spec.hostPID=false.",
                 remediation_type="manifest-patch",
                 remediation_patch={"spec": {"hostPID": False}},
@@ -84,30 +119,31 @@ class PodScanner:
             for volume in pod.spec.volumes or []:
                 if volume.host_path:
                     findings.append(SecurityFindingModel(
-                        name=f"{namespace}-{pod_name}-hostpath-{volume.name}",
+                        name=f"{namespace}-{resource_name}-hostpath-{volume.name}",
                         severity="high",
                         category="pod-security",
                         namespace=namespace,
                         resource_kind="Pod",
-                        resource_name=pod_name,
+                        resource_name=resource_name,
                         issue=f"Pod uses hostPath volume '{volume.name}'",
-                        reason=[f"volume.{volume.name}.hostPath is set"],
+                        reason=base_reason + [f"volume.{volume.name}.hostPath is set"],
                         recommendation="Avoid hostPath volumes. Prefer PVCs, projected volumes, ConfigMaps, or Secrets.",
                         remediation_type="documentation",
                     ))
 
         if self.rules.get("flagDefaultServiceAccount", True):
             service_account = pod.spec.service_account_name or "default"
+
             if service_account == "default":
                 findings.append(SecurityFindingModel(
-                    name=f"{namespace}-{pod_name}-default-service-account",
+                    name=f"{namespace}-{resource_name}-default-service-account",
                     severity="medium",
                     category="service-account",
                     namespace=namespace,
                     resource_kind="Pod",
-                    resource_name=pod_name,
+                    resource_name=resource_name,
                     issue="Pod uses the default ServiceAccount",
-                    reason=["spec.serviceAccountName is missing or default"],
+                    reason=base_reason + ["spec.serviceAccountName is missing or default"],
                     recommendation="Create a dedicated least-privilege ServiceAccount for this workload.",
                     remediation_type="manifest-patch",
                     remediation_patch={"spec": {"serviceAccountName": "dedicated-service-account"}},
@@ -118,11 +154,24 @@ class PodScanner:
         containers.extend(pod.spec.init_containers or [])
 
         for container in containers:
-            findings.extend(self.scan_container_security(namespace, pod_name, container))
+            findings.extend(
+                self.scan_container_security(
+                    namespace=namespace,
+                    pod_name=resource_name,
+                    container=container,
+                    base_reason=base_reason,
+                )
+            )
 
         return findings
 
-    def scan_container_security(self, namespace: str, pod_name: str, container) -> List[SecurityFindingModel]:
+    def scan_container_security(
+        self,
+        namespace: str,
+        pod_name: str,
+        container,
+        base_reason: List[str],
+    ) -> List[SecurityFindingModel]:
         findings = []
         container_name = container.name
         security_context = container.security_context
@@ -137,7 +186,7 @@ class PodScanner:
                     resource_kind="Pod",
                     resource_name=pod_name,
                     issue=f"Container '{container_name}' is running privileged",
-                    reason=[f"container.{container_name}.securityContext.privileged=true"],
+                    reason=base_reason + [f"container.{container_name}.securityContext.privileged=true"],
                     recommendation="Set securityContext.privileged=false.",
                     remediation_type="manifest-patch",
                     remediation_patch={
@@ -162,7 +211,7 @@ class PodScanner:
                     resource_kind="Pod",
                     resource_name=pod_name,
                     issue=f"Container '{container_name}' does not enforce runAsNonRoot",
-                    reason=[f"container.{container_name}.securityContext.runAsNonRoot missing or false"],
+                    reason=base_reason + [f"container.{container_name}.securityContext.runAsNonRoot missing or false"],
                     recommendation="Set securityContext.runAsNonRoot=true and use a non-zero runAsUser.",
                     remediation_type="manifest-patch",
                     remediation_patch={
@@ -179,6 +228,7 @@ class PodScanner:
 
         if self.rules.get("forbidLatestImageTag", True):
             image = container.image
+
             if image_uses_latest_or_no_tag(image):
                 findings.append(SecurityFindingModel(
                     name=f"{namespace}-{pod_name}-{container_name}-latest-image",
@@ -188,70 +238,8 @@ class PodScanner:
                     resource_kind="Pod",
                     resource_name=pod_name,
                     issue=f"Container '{container_name}' uses ':latest' or no explicit image tag",
-                    reason=[f"image={image}"],
+                    reason=base_reason + [f"image={image}"],
                     recommendation="Use a fixed immutable image tag or image digest.",
-                    remediation_type="documentation",
-                ))
-
-        if self.rules.get("requireReadinessProbe", True):
-            if container.readiness_probe is None:
-                findings.append(SecurityFindingModel(
-                    name=f"{namespace}-{pod_name}-{container_name}-missing-readiness-probe",
-                    severity="low",
-                    category="pod-security",
-                    namespace=namespace,
-                    resource_kind="Pod",
-                    resource_name=pod_name,
-                    issue=f"Container '{container_name}' has no readinessProbe",
-                    reason=[f"container.{container_name}.readinessProbe is missing"],
-                    recommendation="Add a readinessProbe so traffic is only sent when the container is ready.",
-                    remediation_type="documentation",
-                ))
-
-        if self.rules.get("requireLivenessProbe", False):
-            if container.liveness_probe is None:
-                findings.append(SecurityFindingModel(
-                    name=f"{namespace}-{pod_name}-{container_name}-missing-liveness-probe",
-                    severity="low",
-                    category="pod-security",
-                    namespace=namespace,
-                    resource_kind="Pod",
-                    resource_name=pod_name,
-                    issue=f"Container '{container_name}' has no livenessProbe",
-                    reason=[f"container.{container_name}.livenessProbe is missing"],
-                    recommendation="Add a livenessProbe so Kubernetes can restart unhealthy containers.",
-                    remediation_type="documentation",
-                ))
-
-        resources = container.resources
-
-        if self.rules.get("requireResourceRequests", True):
-            if not resources or not resources.requests:
-                findings.append(SecurityFindingModel(
-                    name=f"{namespace}-{pod_name}-{container_name}-missing-resource-requests",
-                    severity="low",
-                    category="pod-security",
-                    namespace=namespace,
-                    resource_kind="Pod",
-                    resource_name=pod_name,
-                    issue=f"Container '{container_name}' has no resource requests",
-                    reason=[f"container.{container_name}.resources.requests is missing"],
-                    recommendation="Set CPU and memory requests for predictable scheduling.",
-                    remediation_type="documentation",
-                ))
-
-        if self.rules.get("requireResourceLimits", True):
-            if not resources or not resources.limits:
-                findings.append(SecurityFindingModel(
-                    name=f"{namespace}-{pod_name}-{container_name}-missing-resource-limits",
-                    severity="low",
-                    category="pod-security",
-                    namespace=namespace,
-                    resource_kind="Pod",
-                    resource_name=pod_name,
-                    issue=f"Container '{container_name}' has no resource limits",
-                    reason=[f"container.{container_name}.resources.limits is missing"],
-                    recommendation="Set CPU and memory limits to reduce resource-exhaustion risk.",
                     remediation_type="documentation",
                 ))
 

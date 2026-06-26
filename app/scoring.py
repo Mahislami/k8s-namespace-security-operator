@@ -1,38 +1,68 @@
-from typing import List
+from typing import List, Dict
 from app.models import SecurityFindingModel
 
 
-SEVERITY_POINTS = {
-    "critical": 20,
-    "high": 12,
-    "medium": 6,
-    "low": 2,
+SEVERITY_PENALTIES = {
+    "critical": 25,
+    "high": 10,
+    "medium": 3,
+    "low": 1,
     "info": 0,
 }
 
 
-def calculate_namespace_score(findings: List[SecurityFindingModel]) -> int:
-    """
-    Start from 100 and subtract points for findings.
+CATEGORY_CAPS = {
+    "namespace-security": 15,
+    "network-security": 25,
+    "deployment-security": 20,
+    "daemonset-security": 20,
+    "statefulset-security": 20,
+    "replicaset-security": 12,
+    "job-security": 10,
+    "cronjob-security": 10,
+    "pod-security": 15,
+    "service-account": 10,
+    "image-security": 8,
+    "rbac": 25,
+    "attack-path": 30,
+}
 
-    The score is intentionally simple and explainable for interview/demo.
-    """
-    risk = sum(SEVERITY_POINTS.get(f.severity, 1) for f in findings)
-    return max(0, 100 - risk)
+
+def calculate_namespace_score(findings: List[SecurityFindingModel]) -> int:
+    penalties_by_category = {}
+    has_critical = any(f.severity == "critical" for f in findings)
+
+    for finding in findings:
+        category = finding.category
+        penalty = SEVERITY_PENALTIES.get(finding.severity, 0)
+        penalties_by_category[category] = penalties_by_category.get(category, 0) + penalty
+
+    total_penalty = 0
+
+    for category, penalty in penalties_by_category.items():
+        cap = CATEGORY_CAPS.get(category, 20)
+        total_penalty += min(penalty, cap)
+
+    score = 100 - total_penalty
+
+    if has_critical:
+        return max(score, 0)
+
+    return max(score, 20)
 
 
 def classify_posture(score: int) -> str:
     if score >= 85:
         return "Healthy"
-    if score >= 65:
+    if score >= 70:
         return "Moderate"
     if score >= 40:
         return "Risky"
     return "Critical"
 
 
-def count_by_severity(findings: List[SecurityFindingModel]) -> dict:
-    result = {
+def count_by_severity(findings: List[SecurityFindingModel]) -> Dict[str, int]:
+    counts = {
         "critical": 0,
         "high": 0,
         "medium": 0,
@@ -41,6 +71,7 @@ def count_by_severity(findings: List[SecurityFindingModel]) -> dict:
     }
 
     for finding in findings:
-        result[finding.severity] = result.get(finding.severity, 0) + 1
+        if finding.severity in counts:
+            counts[finding.severity] += 1
 
-    return result
+    return counts

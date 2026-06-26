@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: insecure-standalone-pod
+  namespace: security-operator-demo
+spec:
+  serviceAccountName: default
+  hostNetwork: true
+  containers:
+    - name: insecure-container
+      image: nginx:latest
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insecure-deployment
+  namespace: security-operator-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: insecure-deployment
+  template:
+    metadata:
+      labels:
+        app: insecure-deployment
+    spec:
+      serviceAccountName: default
+      containers:
+        - name: web
+          image: nginx:latest
+          securityContext: {}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: insecure-daemonset
+  namespace: security-operator-demo
+spec:
+  selector:
+    matchLabels:
+      app: insecure-daemonset
+  template:
+    metadata:
+      labels:
+        app: insecure-daemonset
+    spec:
+      serviceAccountName: default
+      hostPID: true
+      containers:
+        - name: node-agent
+          image: busybox:latest
+          command: ["sleep", "3600"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-var-log
+              mountPath: /host/var/log
+      volumes:
+        - name: host-var-log
+          hostPath:
+            path: /var/log
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: insecure-job
+  namespace: security-operator-demo
+spec:
+  template:
+    spec:
+      serviceAccountName: default
+      restartPolicy: Never
+      containers:
+        - name: job
+          image: busybox:latest
+          command: ["sh", "-c", "echo insecure job && sleep 30"]
+          securityContext: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: insecure-nodeport-service
+  namespace: security-operator-demo
+spec:
+  type: NodePort
+  selector:
+    app: insecure-deployment
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080
