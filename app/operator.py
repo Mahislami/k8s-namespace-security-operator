@@ -136,9 +136,9 @@ def safety_resync_worker(logger):
     while True:
         time.sleep(FULL_RESYNC_SECONDS)
 
-        namespaces = WATCH_NAMESPACES
-
-        if not namespaces:
+        if WATCH_NAMESPACES:
+            namespaces = WATCH_NAMESPACES
+        else:
             try:
                 core_api = client.CoreV1Api()
                 namespaces = {
@@ -175,6 +175,14 @@ def seed_existing_namespaces(logger):
         mark_namespace_dirty(name, "startup-seed", logger)
 
 
+def resource_event(namespace, name, resource_type, logger, **kwargs):
+    if not namespace:
+        return
+
+    event_type = kwargs.get("type", "UNKNOWN")
+    mark_namespace_dirty(namespace, f"{resource_type}:{event_type}:{name}", logger)
+
+
 @kopf.on.startup()
 def startup(settings: kopf.OperatorSettings, logger, **kwargs):
     global SECURITY_MANAGER
@@ -203,105 +211,76 @@ def startup(settings: kopf.OperatorSettings, logger, **kwargs):
     threading.Thread(target=safety_resync_worker, args=(logger,), daemon=True).start()
 
 
-@kopf.on.create("", "v1", "namespaces")
-@kopf.on.update("", "v1", "namespaces")
-def namespace_changed(name, logger, **kwargs):
-    mark_namespace_dirty(name, "namespace-changed", logger)
+@kopf.on.event("", "v1", "namespaces")
+def namespace_event(name, logger, **kwargs):
+    mark_namespace_dirty(name, "namespace-event", logger)
 
 
-@kopf.on.create("", "v1", "pods")
-@kopf.on.update("", "v1", "pods")
-@kopf.on.delete("", "v1", "pods")
-def pod_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"pod-changed:{name}", logger)
+@kopf.on.event("", "v1", "pods")
+def pod_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "pod", logger, **kwargs)
 
 
-@kopf.on.create("apps", "v1", "deployments")
-@kopf.on.update("apps", "v1", "deployments")
-@kopf.on.delete("apps", "v1", "deployments")
-def deployment_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"deployment-changed:{name}", logger)
+@kopf.on.event("apps", "v1", "deployments")
+def deployment_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "deployment", logger, **kwargs)
 
 
-@kopf.on.create("apps", "v1", "daemonsets")
-@kopf.on.update("apps", "v1", "daemonsets")
-@kopf.on.delete("apps", "v1", "daemonsets")
-def daemonset_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"daemonset-changed:{name}", logger)
+@kopf.on.event("apps", "v1", "daemonsets")
+def daemonset_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "daemonset", logger, **kwargs)
 
 
-@kopf.on.create("apps", "v1", "statefulsets")
-@kopf.on.update("apps", "v1", "statefulsets")
-@kopf.on.delete("apps", "v1", "statefulsets")
-def statefulset_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"statefulset-changed:{name}", logger)
+@kopf.on.event("apps", "v1", "statefulsets")
+def statefulset_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "statefulset", logger, **kwargs)
 
 
-@kopf.on.create("apps", "v1", "replicasets")
-@kopf.on.update("apps", "v1", "replicasets")
-@kopf.on.delete("apps", "v1", "replicasets")
-def replicaset_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"replicaset-changed:{name}", logger)
+@kopf.on.event("apps", "v1", "replicasets")
+def replicaset_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "replicaset", logger, **kwargs)
 
 
-@kopf.on.create("batch", "v1", "jobs")
-@kopf.on.update("batch", "v1", "jobs")
-@kopf.on.delete("batch", "v1", "jobs")
-def job_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"job-changed:{name}", logger)
+@kopf.on.event("batch", "v1", "jobs")
+def job_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "job", logger, **kwargs)
 
 
-@kopf.on.create("batch", "v1", "cronjobs")
-@kopf.on.update("batch", "v1", "cronjobs")
-@kopf.on.delete("batch", "v1", "cronjobs")
-def cronjob_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"cronjob-changed:{name}", logger)
+@kopf.on.event("batch", "v1", "cronjobs")
+def cronjob_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "cronjob", logger, **kwargs)
 
 
-@kopf.on.create("", "v1", "serviceaccounts")
-@kopf.on.update("", "v1", "serviceaccounts")
-@kopf.on.delete("", "v1", "serviceaccounts")
-def service_account_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"serviceaccount-changed:{name}", logger)
+@kopf.on.event("", "v1", "serviceaccounts")
+def service_account_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "serviceaccount", logger, **kwargs)
 
 
-@kopf.on.create("", "v1", "services")
-@kopf.on.update("", "v1", "services")
-@kopf.on.delete("", "v1", "services")
-def service_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"service-changed:{name}", logger)
+@kopf.on.event("", "v1", "services")
+def service_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "service", logger, **kwargs)
 
 
-@kopf.on.create("networking.k8s.io", "v1", "ingresses")
-@kopf.on.update("networking.k8s.io", "v1", "ingresses")
-@kopf.on.delete("networking.k8s.io", "v1", "ingresses")
-def ingress_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"ingress-changed:{name}", logger)
+@kopf.on.event("networking.k8s.io", "v1", "ingresses")
+def ingress_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "ingress", logger, **kwargs)
 
 
-@kopf.on.create("rbac.authorization.k8s.io", "v1", "rolebindings")
-@kopf.on.update("rbac.authorization.k8s.io", "v1", "rolebindings")
-@kopf.on.delete("rbac.authorization.k8s.io", "v1", "rolebindings")
-def rolebinding_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"rolebinding-changed:{name}", logger)
+@kopf.on.event("rbac.authorization.k8s.io", "v1", "rolebindings")
+def rolebinding_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "rolebinding", logger, **kwargs)
 
 
-@kopf.on.create("networking.k8s.io", "v1", "networkpolicies")
-@kopf.on.update("networking.k8s.io", "v1", "networkpolicies")
-@kopf.on.delete("networking.k8s.io", "v1", "networkpolicies")
-def network_policy_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"networkpolicy-changed:{name}", logger)
+@kopf.on.event("networking.k8s.io", "v1", "networkpolicies")
+def network_policy_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "networkpolicy", logger, **kwargs)
 
 
-@kopf.on.create("cilium.io", "v2", "ciliumnetworkpolicies")
-@kopf.on.update("cilium.io", "v2", "ciliumnetworkpolicies")
-@kopf.on.delete("cilium.io", "v2", "ciliumnetworkpolicies")
-def cilium_network_policy_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"ciliumnetworkpolicy-changed:{name}", logger)
+@kopf.on.event("cilium.io", "v2", "ciliumnetworkpolicies")
+def cilium_network_policy_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "ciliumnetworkpolicy", logger, **kwargs)
 
 
-@kopf.on.create("traefik.io", "v1alpha1", "ingressroutes")
-@kopf.on.update("traefik.io", "v1alpha1", "ingressroutes")
-@kopf.on.delete("traefik.io", "v1alpha1", "ingressroutes")
-def traefik_ingressroute_changed(namespace, name, logger, **kwargs):
-    mark_namespace_dirty(namespace, f"traefik-ingressroute-changed:{name}", logger)
+@kopf.on.event("traefik.io", "v1alpha1", "ingressroutes")
+def traefik_ingressroute_event(namespace, name, logger, **kwargs):
+    resource_event(namespace, name, "traefik-ingressroute", logger, **kwargs)
