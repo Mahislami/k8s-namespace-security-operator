@@ -10,7 +10,6 @@ spec:
     singular: securityfinding
     kind: SecurityFinding
     shortNames:
-      - secfinding
       - sf
   versions:
     - name: v1alpha1
@@ -29,9 +28,22 @@ spec:
         - name: State
           type: string
           jsonPath: .status.state
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
+        - name: FirstSeen
+          type: string
+          jsonPath: .status.firstSeen
+          priority: 1
+        - name: LastSeen
+          type: string
+          jsonPath: .status.lastSeen
+          priority: 1
+        - name: ResolvedAt
+          type: string
+          jsonPath: .status.resolvedAt
+          priority: 1
+        - name: Recur
+          type: integer
+          jsonPath: .status.recurrenceCount
+          priority: 1
       schema:
         openAPIV3Schema:
           type: object
@@ -68,9 +80,12 @@ spec:
                     - cronjob-security
                     - namespace-security
                     - network-security
-                    - rbac
                     - service-account
                     - image-security
+                    - secret-security
+                    - configmap-security
+                    - storage-security
+                    - rbac
                     - attack-path
                 resourceKind:
                   type: string
@@ -94,12 +109,18 @@ spec:
                   enum:
                     - Active
                     - Resolved
-                    - Suppressed
                 firstSeen:
                   type: string
-                  format: date-time
                 lastSeen:
                   type: string
-                  format: date-time
+                resolvedAt:
+                  type: string
+                  nullable: true
+                resolutionReason:
+                  type: string
+                  nullable: true
+                recurrenceCount:
+                  type: integer
+                  minimum: 0
       subresources:
         status: {}

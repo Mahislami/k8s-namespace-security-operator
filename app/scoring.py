@@ -23,6 +23,9 @@ CATEGORY_CAPS = {
     "pod-security": 15,
     "service-account": 10,
     "image-security": 8,
+    "secret-security": 12,
+    "configmap-security": 8,
+    "storage-security": 12,
     "rbac": 25,
     "attack-path": 30,
 }
@@ -40,7 +43,7 @@ def calculate_namespace_score(findings: List[SecurityFindingModel]) -> int:
     total_penalty = 0
 
     for category, penalty in penalties_by_category.items():
-        cap = CATEGORY_CAPS.get(category, 20)
+        cap = CATEGORY_CAPS.get(category, 15)
         total_penalty += min(penalty, cap)
 
     score = 100 - total_penalty

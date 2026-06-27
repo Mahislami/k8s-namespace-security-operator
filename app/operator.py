@@ -1,89 +1,105 @@
+import asyncio
+import logging
 import os
 import time
-import threading
-import urllib3
+import warnings
+from typing import Dict
 
 import kopf
+import urllib3
 from kubernetes import client, config
 
 from app.security_manager import SecurityManager
 
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-
-DEFAULT_EXCLUDE_NAMESPACES = {
-    "kube-system",
-    "kube-public",
-    "kube-node-lease",
-}
-
-
-def parse_csv_env(name: str) -> set:
-    value = os.getenv(name, "")
-    return {item.strip() for item in value.split(",") if item.strip()}
-
-
-def parse_int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
-def parse_float_env(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
-WATCH_NAMESPACES = parse_csv_env("WATCH_NAMESPACES")
-EXCLUDE_NAMESPACES = parse_csv_env("EXCLUDE_NAMESPACES") or DEFAULT_EXCLUDE_NAMESPACES
-
-DIRTY_EVENT_THRESHOLD = parse_int_env("DIRTY_EVENT_THRESHOLD", 10)
-DIRTY_FLUSH_SECONDS = parse_float_env("DIRTY_FLUSH_SECONDS", 10.0)
-DIRTY_WORKER_INTERVAL_SECONDS = parse_float_env("DIRTY_WORKER_INTERVAL_SECONDS", 2.0)
-FULL_RESYNC_SECONDS = parse_float_env("FULL_RESYNC_SECONDS", 1800.0)
-RETRY_BACKOFF_SECONDS = parse_float_env("RETRY_BACKOFF_SECONDS", 60.0)
-
-DIRTY_NAMESPACES = {}
-DIRTY_LOCK = threading.Lock()
-RECONCILE_LOCK = threading.Lock()
-
+DIRTY_NAMESPACES: Dict[str, dict] = {}
+DIRTY_LOCK = asyncio.Lock()
 SECURITY_MANAGER = None
 
 
-def should_skip_namespace(namespace: str) -> bool:
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name) or str(default))
+    except ValueError:
+        return default
+
+
+WATCH_NAMESPACES = {
+    ns.strip()
+    for ns in (os.getenv("WATCH_NAMESPACES") or "").split(",")
+    if ns.strip()
+}
+
+EXCLUDE_NAMESPACES = {
+    ns.strip()
+    for ns in (
+        os.getenv("EXCLUDE_NAMESPACES")
+        or "kube-system,kube-public,kube-node-lease"
+    ).split(",")
+    if ns.strip()
+}
+
+DIRTY_EVENT_THRESHOLD = env_int("DIRTY_EVENT_THRESHOLD", 20)
+DIRTY_FLUSH_SECONDS = env_int("DIRTY_FLUSH_SECONDS", 20)
+DIRTY_WORKER_INTERVAL_SECONDS = env_int("DIRTY_WORKER_INTERVAL_SECONDS", 5)
+RETRY_BACKOFF_SECONDS = env_int("RETRY_BACKOFF_SECONDS", 120)
+FULL_RESYNC_SECONDS = env_int("FULL_RESYNC_SECONDS", 1800)
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").upper()
+
+
+def configure_logging():
+    logging.getLogger().setLevel(LOG_LEVEL)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("kubernetes").setLevel(logging.WARNING)
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+
+
+def should_process_namespace(namespace: str) -> bool:
+    if not namespace:
+        return False
+
     if namespace in EXCLUDE_NAMESPACES:
-        return True
+        return False
 
     if WATCH_NAMESPACES and namespace not in WATCH_NAMESPACES:
-        return True
+        return False
 
-    return False
+    return True
 
 
-def mark_namespace_dirty(namespace: str, reason: str, logger, delay_seconds: float = 0.0):
-    if not namespace or should_skip_namespace(namespace):
+def should_ignore_resource(name: str) -> bool:
+    if not name:
+        return False
+
+    return name.startswith("namespace-security-operator-")
+
+
+async def mark_namespace_dirty(namespace: str, reason: str, logger):
+    if not should_process_namespace(namespace):
         return
 
-    now = time.time()
-    first_seen = now + delay_seconds
+    async with DIRTY_LOCK:
+        now = time.time()
 
-    with DIRTY_LOCK:
         if namespace not in DIRTY_NAMESPACES:
             DIRTY_NAMESPACES[namespace] = {
+                "first_seen": now,
+                "last_seen": now,
                 "count": 0,
-                "first_seen": first_seen,
                 "reasons": set(),
+                "retry_after": 0,
             }
 
-        DIRTY_NAMESPACES[namespace]["count"] += 1
-        DIRTY_NAMESPACES[namespace]["reasons"].add(reason)
-        count = DIRTY_NAMESPACES[namespace]["count"]
+        item = DIRTY_NAMESPACES[namespace]
+        item["last_seen"] = now
+        item["count"] += 1
+        item["reasons"].add(reason)
 
-    logger.info(f"Marked namespace dirty: {namespace}, reason={reason}, count={count}")
+        logger.info(
+            f"Marked namespace dirty: {namespace}, "
+            f"reason={reason}, count={item['count']}"
+        )
 
 
 def reconcile_namespace(namespace: str, logger):
@@ -92,100 +108,114 @@ def reconcile_namespace(namespace: str, logger):
     if SECURITY_MANAGER is None:
         SECURITY_MANAGER = SecurityManager(logger)
 
-    with RECONCILE_LOCK:
-        SECURITY_MANAGER.reconcile_namespace(namespace)
+    SECURITY_MANAGER.reconcile_namespace(namespace)
 
 
-def dirty_worker(logger):
+async def dirty_worker(logger):
     while True:
-        time.sleep(DIRTY_WORKER_INTERVAL_SECONDS)
+        await asyncio.sleep(DIRTY_WORKER_INTERVAL_SECONDS)
 
-        now = time.time()
-        namespaces_to_flush = []
+        namespace_to_reconcile = None
+        item_snapshot = None
 
-        with DIRTY_LOCK:
-            for namespace, data in list(DIRTY_NAMESPACES.items()):
-                age = now - data["first_seen"]
+        async with DIRTY_LOCK:
+            now = time.time()
 
-                if age < 0:
+            for namespace, item in list(DIRTY_NAMESPACES.items()):
+                if item.get("retry_after", 0) > now:
                     continue
 
-                if data["count"] >= DIRTY_EVENT_THRESHOLD or age >= DIRTY_FLUSH_SECONDS:
-                    namespaces_to_flush.append((namespace, data))
-                    DIRTY_NAMESPACES.pop(namespace, None)
+                age = now - item["first_seen"]
+                count = item["count"]
 
-        for namespace, data in namespaces_to_flush:
-            try:
-                logger.info(
-                    f"Reconciling dirty namespace: {namespace}, "
-                    f"coalescedEvents={data['count']}, "
-                    f"reasons={sorted(data['reasons'])}"
-                )
-                reconcile_namespace(namespace, logger)
-            except Exception as exc:
-                logger.exception(f"Failed to reconcile dirty namespace {namespace}: {exc}")
-                mark_namespace_dirty(
-                    namespace,
-                    "reconcile-retry",
-                    logger,
-                    delay_seconds=RETRY_BACKOFF_SECONDS,
-                )
+                if count >= DIRTY_EVENT_THRESHOLD or age >= DIRTY_FLUSH_SECONDS:
+                    namespace_to_reconcile = namespace
+                    item_snapshot = item
+                    del DIRTY_NAMESPACES[namespace]
+                    break
 
-
-def safety_resync_worker(logger):
-    while True:
-        time.sleep(FULL_RESYNC_SECONDS)
-
-        if WATCH_NAMESPACES:
-            namespaces = WATCH_NAMESPACES
-        else:
-            try:
-                core_api = client.CoreV1Api()
-                namespaces = {
-                    ns.metadata.name
-                    for ns in core_api.list_namespace().items
-                    if not should_skip_namespace(ns.metadata.name)
-                }
-            except Exception as exc:
-                logger.exception(f"Failed to list namespaces for safety resync: {exc}")
-                continue
-
-        for namespace in namespaces:
-            if should_skip_namespace(namespace):
-                continue
-
-            mark_namespace_dirty(namespace, "periodic-safety-resync", logger)
-
-
-def seed_existing_namespaces(logger):
-    if WATCH_NAMESPACES:
-        for namespace in WATCH_NAMESPACES:
-            if not should_skip_namespace(namespace):
-                mark_namespace_dirty(namespace, "startup-seed", logger)
-        return
-
-    core_api = client.CoreV1Api()
-
-    for namespace in core_api.list_namespace().items:
-        name = namespace.metadata.name
-
-        if should_skip_namespace(name):
+        if not namespace_to_reconcile:
             continue
 
-        mark_namespace_dirty(name, "startup-seed", logger)
+        reasons = sorted(item_snapshot.get("reasons", set()))
+        count = item_snapshot.get("count", 0)
+
+        logger.info(
+            f"Reconciling dirty namespace: {namespace_to_reconcile}, "
+            f"coalescedEvents={count}, reasons={reasons}"
+        )
+
+        try:
+            await asyncio.to_thread(
+                reconcile_namespace,
+                namespace_to_reconcile,
+                logger,
+            )
+        except Exception as exc:
+            logger.exception(
+                f"Failed to reconcile dirty namespace {namespace_to_reconcile}: {exc}"
+            )
+
+            async with DIRTY_LOCK:
+                DIRTY_NAMESPACES[namespace_to_reconcile] = {
+                    "first_seen": time.time(),
+                    "last_seen": time.time(),
+                    "count": 1,
+                    "reasons": {"reconcile-retry"},
+                    "retry_after": time.time() + RETRY_BACKOFF_SECONDS,
+                }
 
 
-def resource_event(namespace, name, resource_type, logger, **kwargs):
-    if not namespace:
+async def full_resync_worker(logger):
+    while True:
+        await asyncio.sleep(FULL_RESYNC_SECONDS)
+
+        try:
+            core_api = client.CoreV1Api()
+            namespaces = core_api.list_namespace().items
+        except Exception as exc:
+            logger.warning(f"Failed to list namespaces for full resync: {exc}")
+            continue
+
+        for ns in namespaces:
+            name = ns.metadata.name
+            if should_process_namespace(name):
+                await mark_namespace_dirty(name, "periodic-full-resync", logger)
+
+
+async def resource_event(resource_namespace, resource_name, resource_type, logger, **kwargs):
+    if not should_process_namespace(resource_namespace):
         return
 
-    event_type = kwargs.get("type", "UNKNOWN")
-    mark_namespace_dirty(namespace, f"{resource_type}:{event_type}:{name}", logger)
+    if should_ignore_resource(resource_name):
+        return
+
+    body = kwargs.get("body") or {}
+    metadata = body.get("metadata", {}) if isinstance(body, dict) else {}
+
+    if metadata.get("deletionTimestamp"):
+        logger.info(f"{resource_type} deleting: {resource_namespace}/{resource_name}")
+        await mark_namespace_dirty(
+            resource_namespace,
+            f"{resource_type}-deleted:{resource_name}",
+            logger,
+        )
+        return
+
+    logger.info(f"{resource_type} changed: {resource_namespace}/{resource_name}")
+    await mark_namespace_dirty(
+        resource_namespace,
+        f"{resource_type}-changed:{resource_name}",
+        logger,
+    )
 
 
 @kopf.on.startup()
-def startup(settings: kopf.OperatorSettings, logger, **kwargs):
-    global SECURITY_MANAGER
+async def startup(settings: kopf.OperatorSettings, logger, **kwargs):
+    configure_logging()
+
+    settings.persistence.finalizer = None
+    settings.persistence.progress_storage = kopf.AnnotationsProgressStorage()
 
     try:
         config.load_incluster_config()
@@ -194,93 +224,114 @@ def startup(settings: kopf.OperatorSettings, logger, **kwargs):
         config.load_kube_config()
         logger.info("Loaded local kubeconfig")
 
-    SECURITY_MANAGER = SecurityManager(logger)
+    logger.info(
+        "Namespace Security Operator started "
+        f"WATCH_NAMESPACES={sorted(WATCH_NAMESPACES) if WATCH_NAMESPACES else 'ALL'} "
+        f"EXCLUDE_NAMESPACES={sorted(EXCLUDE_NAMESPACES)} "
+        f"DIRTY_EVENT_THRESHOLD={DIRTY_EVENT_THRESHOLD} "
+        f"DIRTY_FLUSH_SECONDS={DIRTY_FLUSH_SECONDS} "
+        f"DIRTY_WORKER_INTERVAL_SECONDS={DIRTY_WORKER_INTERVAL_SECONDS} "
+        f"RETRY_BACKOFF_SECONDS={RETRY_BACKOFF_SECONDS} "
+        f"FULL_RESYNC_SECONDS={FULL_RESYNC_SECONDS}"
+    )
 
-    logger.info("Namespace Security Operator started")
-    logger.info(f"Watch namespaces: {WATCH_NAMESPACES or 'cluster-wide'}")
-    logger.info(f"Excluded namespaces: {EXCLUDE_NAMESPACES}")
-    logger.info(f"Dirty event threshold: {DIRTY_EVENT_THRESHOLD}")
-    logger.info(f"Dirty flush seconds: {DIRTY_FLUSH_SECONDS}")
-    logger.info(f"Dirty worker interval seconds: {DIRTY_WORKER_INTERVAL_SECONDS}")
-    logger.info(f"Full resync seconds: {FULL_RESYNC_SECONDS}")
-    logger.info(f"Retry backoff seconds: {RETRY_BACKOFF_SECONDS}")
+    asyncio.create_task(dirty_worker(logger))
+    asyncio.create_task(full_resync_worker(logger))
 
-    seed_existing_namespaces(logger)
+    core_api = client.CoreV1Api()
+    namespaces = core_api.list_namespace().items
 
-    threading.Thread(target=dirty_worker, args=(logger,), daemon=True).start()
-    threading.Thread(target=safety_resync_worker, args=(logger,), daemon=True).start()
+    for ns in namespaces:
+        name = ns.metadata.name
+        if should_process_namespace(name):
+            await mark_namespace_dirty(name, "startup-seed", logger)
 
 
 @kopf.on.event("", "v1", "namespaces")
-def namespace_event(name, logger, **kwargs):
-    mark_namespace_dirty(name, "namespace-event", logger)
+async def namespace_event(name, logger, **kwargs):
+    await resource_event(name, name, "namespace", logger)
 
 
 @kopf.on.event("", "v1", "pods")
-def pod_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "pod", logger, **kwargs)
+async def pod_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "pod", logger, **kwargs)
 
 
 @kopf.on.event("apps", "v1", "deployments")
-def deployment_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "deployment", logger, **kwargs)
+async def deployment_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "deployment", logger, **kwargs)
 
 
 @kopf.on.event("apps", "v1", "daemonsets")
-def daemonset_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "daemonset", logger, **kwargs)
+async def daemonset_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "daemonset", logger, **kwargs)
 
 
 @kopf.on.event("apps", "v1", "statefulsets")
-def statefulset_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "statefulset", logger, **kwargs)
+async def statefulset_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "statefulset", logger, **kwargs)
 
 
 @kopf.on.event("apps", "v1", "replicasets")
-def replicaset_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "replicaset", logger, **kwargs)
+async def replicaset_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "replicaset", logger, **kwargs)
 
 
 @kopf.on.event("batch", "v1", "jobs")
-def job_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "job", logger, **kwargs)
+async def job_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "job", logger, **kwargs)
 
 
 @kopf.on.event("batch", "v1", "cronjobs")
-def cronjob_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "cronjob", logger, **kwargs)
-
-
-@kopf.on.event("", "v1", "serviceaccounts")
-def service_account_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "serviceaccount", logger, **kwargs)
+async def cronjob_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "cronjob", logger, **kwargs)
 
 
 @kopf.on.event("", "v1", "services")
-def service_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "service", logger, **kwargs)
+async def service_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "service", logger, **kwargs)
 
 
-@kopf.on.event("networking.k8s.io", "v1", "ingresses")
-def ingress_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "ingress", logger, **kwargs)
+@kopf.on.event("", "v1", "serviceaccounts")
+async def service_account_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "serviceaccount", logger, **kwargs)
 
 
-@kopf.on.event("rbac.authorization.k8s.io", "v1", "rolebindings")
-def rolebinding_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "rolebinding", logger, **kwargs)
+@kopf.on.event("", "v1", "secrets")
+async def secret_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "secret", logger, **kwargs)
+
+
+@kopf.on.event("", "v1", "configmaps")
+async def configmap_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "configmap", logger, **kwargs)
+
+
+@kopf.on.event("", "v1", "persistentvolumeclaims")
+async def pvc_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "pvc", logger, **kwargs)
 
 
 @kopf.on.event("networking.k8s.io", "v1", "networkpolicies")
-def network_policy_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "networkpolicy", logger, **kwargs)
+async def network_policy_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "networkpolicy", logger, **kwargs)
+
+
+@kopf.on.event("networking.k8s.io", "v1", "ingresses")
+async def ingress_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "ingress", logger, **kwargs)
+
+
+@kopf.on.event("rbac.authorization.k8s.io", "v1", "rolebindings")
+async def rolebinding_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "rolebinding", logger, **kwargs)
 
 
 @kopf.on.event("cilium.io", "v2", "ciliumnetworkpolicies")
-def cilium_network_policy_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "ciliumnetworkpolicy", logger, **kwargs)
+async def cilium_network_policy_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "ciliumnetworkpolicy", logger, **kwargs)
 
 
 @kopf.on.event("traefik.io", "v1alpha1", "ingressroutes")
-def traefik_ingressroute_event(namespace, name, logger, **kwargs):
-    resource_event(namespace, name, "traefik-ingressroute", logger, **kwargs)
+async def ingressroute_event(namespace, name, logger, **kwargs):
+    await resource_event(namespace, name, "ingressroute", logger, **kwargs)

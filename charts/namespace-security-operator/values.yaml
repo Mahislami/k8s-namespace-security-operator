@@ -1,20 +1,42 @@
+image:
+  repository: mahdislami/namespace-security-operator
+  tag: latest
+  pullPolicy: Always
+
 operator:
-  namespace: security-system
+  namespace: security-operator-demo
+  replicas: 1
 
-  image: namespace-security-operator:latest
-  imagePullPolicy: IfNotPresent
-
-  # Empty means cluster-wide except excluded namespaces.
-  # Example: "security-operator-demo,default"
-  watchNamespaces: ""
-
+  watchNamespaces: "security-operator-demo"
   excludeNamespaces: "kube-system,kube-public,kube-node-lease"
 
-  dirtyEventThreshold: "10"
-  dirtyFlushSeconds: "10"
-  dirtyWorkerIntervalSeconds: "2"
+  dirtyEventThreshold: "1"
+  dirtyFlushSeconds: "2"
+  dirtyWorkerIntervalSeconds: "1"
+  retryBackoffSeconds: "120"
   fullResyncSeconds: "1800"
+
+  resolvedFindingRetentionDays: "30"
+
+  logLevel: "INFO"
 
 securityProfile:
   name: default-profile
-  severityThreshold: medium
+  rules:
+    requireRunAsNonRoot: true
+    requireReadOnlyRootFilesystem: false
+    requireResourceLimits: false
+    requireNetworkPolicy: true
+    forbidPrivilegedContainers: true
+    forbidHostNetwork: true
+    forbidHostPID: true
+    forbidHostPath: true
+    trustedRegistries: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

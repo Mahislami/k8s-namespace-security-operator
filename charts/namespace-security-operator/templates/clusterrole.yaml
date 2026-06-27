@@ -3,63 +3,115 @@ kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}
 rules:
-  - apiGroups: [""]
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+      - list
+      - watch
+
+  - apiGroups:
+      - ""
     resources:
       - namespaces
       - pods
-      - serviceaccounts
       - services
-    verbs: ["get", "list", "watch"]
+      - serviceaccounts
+      - secrets
+      - configmaps
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["apps"]
+  - apiGroups:
+      - apps
     resources:
       - deployments
-      - replicasets
       - daemonsets
       - statefulsets
-    verbs: ["get", "list", "watch"]
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["batch"]
+  - apiGroups:
+      - batch
     resources:
       - jobs
       - cronjobs
-    verbs: ["get", "list", "watch"]
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources:
-      - roles
-      - rolebindings
-    verbs: ["get", "list", "watch"]
-
-  - apiGroups: ["networking.k8s.io"]
+  - apiGroups:
+      - networking.k8s.io
     resources:
       - networkpolicies
       - ingresses
-    verbs: ["get", "list", "watch"]
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["cilium.io"]
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs:
+      - get
+      - list
+      - watch
+
+  - apiGroups:
+      - cilium.io
     resources:
       - ciliumnetworkpolicies
-      - ciliumclusterwidenetworkpolicies
-    verbs: ["get", "list", "watch"]
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["traefik.io"]
+  - apiGroups:
+      - traefik.io
     resources:
       - ingressroutes
-      - middlewares
-      - tlsoptions
-    verbs: ["get", "list", "watch"]
+    verbs:
+      - get
+      - list
+      - watch
 
-  - apiGroups: ["security.meslami.io"]
+  - apiGroups:
+      - security.meslami.io
     resources:
       - securitypolicyprofiles
       - namespacesecurityreports
       - securityfindings
       - securityremediations
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - patch
+      - update
+      - delete
 
-  - apiGroups: ["security.meslami.io"]
+  - apiGroups:
+      - security.meslami.io
     resources:
       - namespacesecurityreports/status
       - securityfindings/status
-    verbs: ["get", "update", "patch"]
+      - securityremediations/status
+    verbs:
+      - get
+      - patch
+      - update

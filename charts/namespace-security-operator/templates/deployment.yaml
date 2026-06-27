@@ -3,36 +3,50 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Values.operator.namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.operator.replicas }}
   selector:
     matchLabels:
-      app: {{ .Release.Name }}
+      app.kubernetes.io/name: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}
+        app.kubernetes.io/name: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}
       containers:
         - name: operator
-          image: {{ .Values.operator.image }}
-          imagePullPolicy: {{ .Values.operator.imagePullPolicy }}
-          command:
-            - kopf
-            - run
-            - /app/app/operator.py
-            - --verbose
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: WATCH_NAMESPACES
-              value: "{{ .Values.operator.watchNamespaces }}"
+              value: {{ .Values.operator.watchNamespaces | quote }}
+
             - name: EXCLUDE_NAMESPACES
-              value: "{{ .Values.operator.excludeNamespaces }}"
+              value: {{ .Values.operator.excludeNamespaces | quote }}
+
             - name: DIRTY_EVENT_THRESHOLD
-              value: "{{ .Values.operator.dirtyEventThreshold }}"
+              value: {{ .Values.operator.dirtyEventThreshold | quote }}
+
             - name: DIRTY_FLUSH_SECONDS
-              value: "{{ .Values.operator.dirtyFlushSeconds }}"
+              value: {{ .Values.operator.dirtyFlushSeconds | quote }}
+
             - name: DIRTY_WORKER_INTERVAL_SECONDS
-              value: "{{ .Values.operator.dirtyWorkerIntervalSeconds }}"
+              value: {{ .Values.operator.dirtyWorkerIntervalSeconds | quote }}
+
+            - name: RETRY_BACKOFF_SECONDS
+              value: {{ .Values.operator.retryBackoffSeconds | quote }}
+
             - name: FULL_RESYNC_SECONDS
-              value: "{{ .Values.operator.fullResyncSeconds }}"
+              value: {{ .Values.operator.fullResyncSeconds | quote }}
+
+            - name: RESOLVED_FINDING_RETENTION_DAYS
+              value: {{ .Values.operator.resolvedFindingRetentionDays | quote }}
+
+            - name: LOG_LEVEL
+              value: {{ .Values.operator.logLevel | quote }}
+
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

@@ -16,6 +16,31 @@ spec:
     - name: v1alpha1
       served: true
       storage: true
+      additionalPrinterColumns:
+        - name: Finding
+          type: string
+          jsonPath: .spec.findingRef
+        - name: Action
+          type: string
+          jsonPath: .spec.actionType
+        - name: Risk
+          type: string
+          jsonPath: .spec.risk
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: FindingState
+          type: string
+          jsonPath: .status.findingState
+          priority: 1
+        - name: Updated
+          type: string
+          jsonPath: .status.lastUpdated
+          priority: 1
+        - name: ResolvedAt
+          type: string
+          jsonPath: .status.resolvedAt
+          priority: 1
       schema:
         openAPIV3Schema:
           type: object
@@ -58,3 +83,28 @@ spec:
                     - low
                     - medium
                     - high
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum:
+                    - Active
+                    - Resolved
+                findingState:
+                  type: string
+                  enum:
+                    - Active
+                    - Resolved
+                createdAt:
+                  type: string
+                lastUpdated:
+                  type: string
+                resolvedAt:
+                  type: string
+                  nullable: true
+                resolutionReason:
+                  type: string
+                  nullable: true
+      subresources:
+        status: {}
