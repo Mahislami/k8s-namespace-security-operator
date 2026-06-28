@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-operator-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: risky-config
+  namespace: security-operator-demo
+data:
+  password: "not-a-real-password"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: risky-secret
+  namespace: security-operator-demo
+type: Opaque
+stringData:
+  api_token: "dummy-token"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: risky-pvc
+  namespace: security-operator-demo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: risky-nodeport-service
+  namespace: security-operator-demo
+spec:
+  type: NodePort
+  selector:
+    app: risky-deployment
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risky-deployment
+  namespace: security-operator-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: risky-deployment
+  template:
+    metadata:
+      labels:
+        app: risky-deployment
+    spec:
+      containers:
+        - name: web
+          image: nginx:latest
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 80
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: risky-daemonset
+  namespace: security-operator-demo
+spec:
+  selector:
+    matchLabels:
+      app: risky-daemonset
+  template:
+    metadata:
+      labels:
+        app: risky-daemonset
+    spec:
+      hostPID: true
+      containers:
+        - name: node-agent
+          image: busybox:latest
+          command: ["sh", "-c", "sleep 3600"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: risky-job
+  namespace: security-operator-demo
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: job
+          image: busybox:latest
+          command: ["sh", "-c", "echo risky job"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: risky-standalone-pod
+  namespace: security-operator-demo
+spec:
+  hostNetwork: true
+  containers:
+    - name: insecure-container
+      image: busybox:latest
+      command: ["sh", "-c", "sleep 3600"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /

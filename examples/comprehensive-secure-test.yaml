@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dedicated-sa
+  namespace: security-operator-demo
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: security-operator-demo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: risky-config
+  namespace: security-operator-demo
+data:
+  app_mode: "secure"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: risky-secret
+  namespace: security-operator-demo
+type: Opaque
+stringData:
+  username: "demo-user"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: risky-pvc
+  namespace: security-operator-demo
+spec:
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: risky-nodeport-service
+  namespace: security-operator-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: risky-deployment
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risky-deployment
+  namespace: security-operator-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: risky-deployment
+  template:
+    metadata:
+      labels:
+        app: risky-deployment
+    spec:
+      serviceAccountName: dedicated-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          envFrom:
+            - secretRef:
+                name: risky-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /tmp/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: risky-pvc
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: risky-daemonset
+  namespace: security-operator-demo
+spec:
+  selector:
+    matchLabels:
+      app: risky-daemonset
+  template:
+    metadata:
+      labels:
+        app: risky-daemonset
+    spec:
+      serviceAccountName: dedicated-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: node-agent
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep 3600"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: risky-standalone-pod
+  namespace: security-operator-demo
+spec:
+  serviceAccountName: dedicated-sa
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: secure-container
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        allowPrivilegeEscalation: false
+        privileged: false
+        capabilities:
+          drop:
+            - ALL
