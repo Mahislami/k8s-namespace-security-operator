@@ -569,6 +569,23 @@ kubectl get deploy namespace-security-operator \
   -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}'
 ```
 
+## Security Scanners
+
+The operator performs namespace-wide security assessments using specialized scanners. Each scanner focuses on a specific area of Kubernetes security and produces `SecurityFinding` resources for detected issues.
+
+| Scanner | Resources Scanned | Security Checks |
+|----------|-------------------|-----------------|
+| **NamespaceScanner** | Namespace | Pod Security Admission labels, missing security labels, namespace-level security posture and configuration. |
+| **WorkloadScanner** | Deployments, DaemonSets, StatefulSets, ReplicaSets, Jobs, CronJobs | Pod template security including privileged containers, `runAsNonRoot`, `hostNetwork`, `hostPID`, `hostPath`, default ServiceAccount usage, and image tag policy. Findings are reported at the controller level to avoid duplicate Pod findings. |
+| **PodScanner** | Standalone Pods (Pods without workload owners) | `hostNetwork`, `hostPID`, `hostPath`, privileged containers, missing `runAsNonRoot`, default ServiceAccount usage, mutable image tags, and other Pod security settings. |
+| **NetworkScanner** | NetworkPolicies, Services, Pods | Missing NetworkPolicies, unrestricted ingress/egress, namespace network isolation, and network segmentation weaknesses. |
+| **ExposureScanner** | Services, Ingresses, Traefik IngressRoutes | Public exposure through `LoadBalancer` and `NodePort` Services, sensitive exposed ports, and missing TLS configuration for Ingress resources. |
+| **RBACScanner** | ServiceAccounts, Roles, ClusterRoles, RoleBindings, ClusterRoleBindings | Overly permissive RBAC rules, wildcard permissions, privileged bindings, and excessive Kubernetes API access. |
+| **ServiceAccountScanner** | ServiceAccounts | Default ServiceAccount usage, automounted tokens, missing least-privilege practices, and ServiceAccount security configuration. |
+| **SecretScanner** | Secrets, Pods (references only) | Legacy ServiceAccount token Secrets, unused Secrets, suspicious Secret key names, and Secret usage analysis. Secret values are **never** read or exposed. |
+| **ConfigMapScanner** | ConfigMaps | Detects ConfigMaps that appear to contain sensitive information by inspecting key names only. ConfigMap values are **never** read or exposed. |
+| **StorageScanner** | Pods, PersistentVolumeClaims | `hostPath` volumes, PVCs without `storageClassName`, and PVCs that are not currently mounted by Pods. |
+| **ImageScanner** | Pods, Deployments, DaemonSets, StatefulSets, Jobs, CronJobs | Image hygiene and supply-chain policy checks including `:latest` tags, missing tags, digest pinning, and trusted registry enforcement. This is **not** a CVE scanner. |
 ---
 
 # Installation
